@@ -1,0 +1,13 @@
+# Shell 脚本强制 LF 行尾（避免 Windows 检出 CRLF 导致 Linux 下 set -o pipefail 报错）
+*.sh text eol=lf
+
+# 常见文本默认 LF
+*.py text eol=lf
+*.sql text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.txt text eol=lf
+*.env.example text eol=lf
+Dockerfile* text eol=lf
