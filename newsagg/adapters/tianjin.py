@@ -14,6 +14,10 @@ class TianjinAdapter(GenericAdapter):
     version = "1.0"
     allowed_hosts = ("news.enorth.com.cn",)
     column_url = "http://news.enorth.com.cn"
+    extra_column_urls = (
+        "http://news.enorth.com.cn/tj/index.shtml",
+        "http://news.enorth.com.cn/gn/gnyw/index.shtml",
+    )
 
 
 register(TianjinAdapter())

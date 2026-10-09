@@ -13,7 +13,7 @@ class LaodongAdapter(GenericAdapter):
     name = "laodong"
     version = "1.0"
     allowed_hosts = ("www.51ldb.com",)
-    column_url = "http://www.51ldb.com/shsldb"
+    column_url = "https://www.51ldb.com/shsldb/"
 
 
 register(LaodongAdapter())

@@ -30,6 +30,14 @@ News Aggregator/
 ├── newsagg/                     # 主程序包，入口 python -m newsagg
 │   ├── adapters/                # 34 个站点的解析规则（一源一文件）
 │   ├── crawl/                   # Scrapy 蜘蛛、采集会话、下载策略
+│   │   ├── spider.py            # SiteSpider：async start() 入口
+│   │   ├── session.py           # CrawlSession：租约续期、布隆、窗口判定
+│   │   ├── engine.py            # open_session / run_blocking / conclude
+│   │   ├── settings.py          # scrapy_settings()：并发8、重试2、关Cookie
+│   │   ├── middlewares.py       # AccessPolicyMiddleware / PaceMiddleware
+│   │   ├── dedup.py             # UrlBloom（Redis 位图布隆）+ 跨源去重
+│   │   ├── sampler.py           # 失败页样本落盘
+│   │   └── mimetypes.py         # 非文本页检测
 │   ├── cli.py                   # 命令行入口（20 个子命令）
 │   ├── config.py                # 环境变量与 Settings
 │   ├── db.py                    # 建表、种子来源、连接工厂
@@ -37,11 +45,21 @@ News Aggregator/
 │   ├── schedule.py              # 协调器：按小时建批、发布任务
 │   ├── worker.py                # 工作进程主循环（领任务→抓取→结束）
 │   ├── queue.py                 # Redis Stream 队列封装
-│   └── 其余模块                  # 见 §2 逐模块说明
+│   ├── query.py                 # 文章检索（省份/日期/关键词/分页）
+│   ├── export.py                # CSV 导出
+│   ├── stats.py                 # 采集统计与逐来源状态
+│   ├── cleaning.py              # 标题/来源/正文清洗 + 时间解析
+│   ├── timewindow.py            # 时间窗口、整点触发键
+│   ├── classify.py              # 投递决策（run/wait/ack）
+│   ├── provinces.py             # 31 省行政区划代码表
+│   ├── urls.py                  # URL 规范化与稳定哈希
+│   ├── logutil.py               # 日志配置（文件轮转 + 控制台）
+│   ├── errors.py                # 自定义异常
+│   └── supervisor.py            # 常驻监督，维持 worker 池
 ├── sql/schema.sql               # 8 张表的建表语句
 ├── tests/                       # 单元测试 + HTML 夹具
-├── scripts/                     # Windows 计划任务注册脚本
-├── docs/                        # 设计文档、开发说明、来源核验记录
+├── scripts/                     # 运维 / 诊断 / 修复脚本（见 §8）
+├── docs/                        # 设计文档、开发说明、采集报告、上下文交接
 ├── pyproject.toml               # 包定义、依赖、pytest 配置
 ├── requirements.txt             # 锁定版本
 ├── .env.example                 # 环境变量模板
@@ -318,17 +336,31 @@ CSV 使用 UTF-8 BOM，以 `=`、`+`、`-`、`@` 开头的单元格会加前缀�
 
 ## 7. 已知注意点
 
-- 江苏要闻的嵌入列表到不了窗口第一天 0 点，任务保持 partial。
+- 江苏要闻的嵌入列表到不了窗口第一天 0 点，任务保持 partial；该站正文由 JS 注入，
+  纯 HTTP 抓到的是模板壳页，用 `scripts/render_harvest.py` 渲染补齐。
 - 重庆栏目页没有更早的历史入口，可见范围从当次列表最旧一条算起。
-- 贵州当代先锋网的「贵州」列表被自身 robots.txt 禁止，按要求仍采集该栏并单独限流 5 秒/并发 1。
-- 江西大江网需 `DEFAULT:@SECLEVEL=1` 的 TLS 套件才能握手（证书仍校验）。
+- 贵州当代先锋网（`www.ddxfw.cn`）的「贵州」列表被自身 robots.txt 禁止，按要求仍
+  采集该栏并单独限流 5 秒/并发 1（`DOWNLOAD_SLOTS`）。**本机实测 http/https 均
+  `RemoteDisconnected` 不可达**，任务会空跑结束，恢复可达后无需改代码。
+- 江西大江网需 `DEFAULT:@SECLEVEL=1` 的 TLS 套件才能握手（证书仍校验）。已由适配器
+  的 `tls_ciphers` 声明、引擎在**该来源的任务进程内**下发
+  `DOWNLOADER_CLIENT_TLS_CIPHERS`，其余来源仍用 OpenSSL 默认套件。
 - 青海栏目 https 会 302 到 http，栏目地址直接写返回 200 的 http 地址。
+  该站部分稿件是**纯视频稿**（正文区只有 `<video>`），无文字属正常，不是解析失败。
 - 上海用劳动报站内 shsldb 稿件；上观新闻静态页只有模板占位符。
-- User-Agent：`newsagg/0.1 (educational local aggregator)`。
+- 海南南海网的列表与正文都在 `rm-nhwapp-1.hinews.cn/v_page.html?newsId=` 上由 JS 注入，
+  需渲染采集；广西广电（gxtv）同理，多数稿件是视频稿。
+- 四川 `world.newssc.org` 的详情页是 266 字节的 JS 跳转壳，真实稿件在新华
+  `h.xinhuaxmt.com`；蜘蛛会跟随一层 JS 跳转后再解析。
+- 单栏目页候选太少（十来条）的来源，用适配器的 `extra_column_urls` 追加同站频道
+  （要闻/时政/本地…），爬虫会把它们一起当作起始页。
+- User-Agent：`newsagg/0.1 (educational local aggregator)`（诊断脚本另用 Chrome UA）。
 
 ---
 
-## 8. 测试
+## 8. 测试与健康检查
+
+### 8.1 单元测试
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
@@ -336,13 +368,27 @@ CSV 使用 UTF-8 BOM，以 `=`、`+`、`-`、`@` 开头的单元格会加前缀�
 
 所有测试可离线运行，无需外部 MySQL/Redis 依赖。
 
+### 8.2 健康检查脚本
+
+| 脚本 | 说明 |
+| --- | --- |
+| `simple_health_check.py` | 基础 4 项检查：MySQL、Redis、来源数、队列积压 |
+| `system_health_check.py` | 扩展检查：逐省来源明细、停用原因、队列采样 |
+
+```powershell
+.\.venv\Scripts\python.exe simple_health_check.py
+.\.venv\Scripts\python.exe system_health_check.py
+```
+
 ---
 
 ## 9. 参考文档
 
-- `docs/superpowers/specs/2026-10-03-provincial-news-aggregator-design.md` —— 首版设计；第 15 节是来源清单的权威版本，已按代码校准
-- `docs/development.md` —— 开发说明与 31 个启用来源的整理时篇数
-- `docs/research/2026-10-09-31-province-source-candidates.md` —— 2026-10-09 的来源候选核验快照，不是当前爬虫入口
+- `docs/设计文档-省级新闻聚合.md` —— 首版设计；来源清单权威版本，已按代码校准
+- `docs/development.md` —— 开发说明与启用来源整理时篇数
+- `docs/采集链路修复与全量采集报告-2026-10-09.md` —— 采集链路修复与全量采集报告
+- `docs/上下文交接-2026-10-09.md` —— 最新上下文交接（接手必读）
+- `docs/爬虫修复工作包.md` / `docs/CONTEXT_HANDOFF.md` —— 历史修复工作包与早期交接
 
 来源名称对照国家网信办 2025 版互联网新闻信息稿源单位名单：
 [2025版互联网新闻信息稿源单位名单_中央网络安全和信息化委员会](https://www.cac.gov.cn/2025-08/14/c_1756886951643180.htm)

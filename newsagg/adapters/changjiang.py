@@ -14,6 +14,11 @@ class ChangjiangAdapter(GenericAdapter):
     version = "1.0"
     allowed_hosts = ("www.cjn.cn",)
     column_url = "http://www.cjn.cn"
+    extra_column_urls = (
+        "http://news.cjn.cn/whpd/",
+        "http://news.cjn.cn/hbpd_19912/",
+        "http://news.cjn.cn/cqpd/",
+    )
 
 
 register(ChangjiangAdapter())

@@ -14,6 +14,10 @@ class SichuanAdapter(GenericAdapter):
     version = "1.0"
     allowed_hosts = ("www.newssc.org",)
     column_url = "http://www.newssc.org"
+    extra_column_urls = (
+        "https://scnews.newssc.org/",
+        "https://city.newssc.org/",
+    )
 
 
 register(SichuanAdapter())

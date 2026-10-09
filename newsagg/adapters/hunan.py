@@ -13,7 +13,7 @@ class HunanAdapter(GenericAdapter):
     name = "hunan"
     version = "1.0"
     allowed_hosts = ("www.rednet.cn",)
-    column_url = "http://www.rednet.cn"
+    column_url = "https://www.rednet.cn/"
 
 
 register(HunanAdapter())

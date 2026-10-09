@@ -13,7 +13,7 @@ class GansuAdapter(GenericAdapter):
     name = "gansu"
     version = "1.0"
     allowed_hosts = ("www.gscn.com.cn",)
-    column_url = "http://www.gscn.com.cn"
+    column_url = "https://www.gscn.com.cn/"
 
 
 register(GansuAdapter())

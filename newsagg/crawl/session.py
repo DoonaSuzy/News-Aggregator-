@@ -144,7 +144,7 @@ class CrawlSession:
             try:
                 self.repo.upsert_discovered(
                     conn, source_id=self.source_id, job_id=self.job_id,
-                    url_hash=url_hash, url=url,
+                    url_hash=url_hash, url=url, list_title=list_title,
                 )
                 conn.commit()
             finally:
@@ -162,7 +162,7 @@ class CrawlSession:
         try:
             new = self.repo.upsert_discovered(
                 conn, source_id=self.source_id, job_id=self.job_id,
-                url_hash=url_hash, url=url,
+                url_hash=url_hash, url=url, list_title=list_title,
             )
             conn.commit()
         finally:

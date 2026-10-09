@@ -13,7 +13,10 @@ class ShaanxiAdapter(GenericAdapter):
     name = "shaanxi"
     version = "1.0"
     allowed_hosts = ("www.hsw.cn",)
-    column_url = "http://www.hsw.cn"
+    column_url = "https://www.hsw.cn/"
+    extra_column_urls = (
+        "https://news.hsw.cn/",
+    )
 
 
 register(ShaanxiAdapter())

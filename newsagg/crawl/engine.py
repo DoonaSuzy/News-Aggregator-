@@ -114,7 +114,8 @@ def run_blocking(job_id: int, *, db: Database | None = None, owner: str | None =
 
     # CrawlerProcess 自管反应器生命周期（含安装/运行/停止），
     # stop_after_crawl=True 保证抓取结束后 reactor 停止、本函数返回。
-    process = CrawlerProcess(scrapy_settings())
+    # 每个任务独占一个进程，因此可以按来源下发各自的 TLS 套件等设置。
+    process = CrawlerProcess(scrapy_settings(**_adapter_overrides(session)))
 
     session.start_renewal()
     try:
@@ -142,6 +143,25 @@ def conclude(session: CrawlSession) -> dict:
     }
     log.info("job %s 完成: %s", session.job_id, stats)
     return stats
+
+
+def _adapter_overrides(session: CrawlSession) -> dict:
+    """按来源下发 Scrapy 设置覆盖（目前只有 TLS 套件）。
+
+    大江网这类老站必须降安全等级才能握手；只对显式声明的来源降级，
+    其余来源保持 OpenSSL 默认套件。
+    """
+    from newsagg.adapters import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    try:
+        adapter = get_adapter(session.adapter_name)
+    except KeyError:
+        return {}
+    ciphers = getattr(adapter, "tls_ciphers", None)
+    if ciphers:
+        return {"DOWNLOADER_CLIENT_TLS_CIPHERS": ciphers}
+    return {}
 
 
 def _column_url(session: CrawlSession) -> str:

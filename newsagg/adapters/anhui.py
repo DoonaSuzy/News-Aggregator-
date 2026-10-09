@@ -14,6 +14,9 @@ class AnhuiAdapter(GenericAdapter):
     version = "1.0"
     allowed_hosts = ("www.anhuinews.com",)
     column_url = "http://www.anhuinews.com"
+    extra_column_urls = (
+        "http://ah.anhuinews.com/",
+    )
 
 
 register(AnhuiAdapter())

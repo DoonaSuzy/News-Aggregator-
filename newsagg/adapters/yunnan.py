@@ -13,7 +13,7 @@ class YunnanAdapter(GenericAdapter):
     name = "yunnan"
     version = "1.0"
     allowed_hosts = ("www.yunnan.cn",)
-    column_url = "http://www.yunnan.cn"
+    column_url = "https://www.yunnan.cn/"
 
 
 register(YunnanAdapter())

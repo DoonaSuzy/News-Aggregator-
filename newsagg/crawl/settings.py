@@ -6,9 +6,10 @@
 设计约定（见文档 §2.3）：
 - 并发 8，``DOWNLOAD_TIMEOUT`` 30。
 - AutoThrottle：目标并发 8，最大延迟 60。
-- 关 Cookie（站点无登录态）。
+- 开 Cookie（站点无登录态，但有站点用一次性 Cookie 做反爬校验）。
 - 重试 2 次，仅针对 5xx/408。
-- 关闭 Scrapy 重定向中间件（重定向由蜘蛛自行判定归属）。
+- 开启 Scrapy 重定向（最多 5 跳）：省级栏目页普遍是 http→https 的 301/302，
+  不跟随会让列表回调收到 3xx 被静默丢弃，任务空跑结束。
 - 注册 ``AccessPolicyMiddleware``(560) 与 ``PaceMiddleware``(590)。
 - ``DOWNLOAD_SLOTS`` 给 guizhou 单独限流。
 
@@ -35,13 +36,19 @@ def scrapy_settings(*, overrides: dict | None = None) -> dict:
         "CONCURRENT_REQUESTS": s.concurrency,
         "CONCURRENT_REQUESTS_PER_DOMAIN": s.concurrency,
         "DOWNLOAD_TIMEOUT": s.download_timeout,
-        "COOKIES_ENABLED": False,
+        # 开启 Cookie：南海网等站点用 C3VK 这类一次性 Cookie 做反爬校验，
+        # 不带 Cookie 会陷入 302 自跳循环（站点无登录态，无隐私影响）。
+        "COOKIES_ENABLED": True,
         "USER_AGENT": s.user_agent,
         "ROBOTSTXT_OBEY": False,  # 由 AccessPolicyMiddleware 自行决策（贵州忽略）
         "RETRY_ENABLED": True,
         "RETRY_TIMES": 2,
         "RETRY_HTTP_CODES": RETRY_HTTP_CODES,
-        "REDIRECT_ENABLED": False,  # 关闭内置重定向中间件
+        # 大量省级栏目页是 http→https 的 301/302（红网、南方网、大众网…），
+        # 关闭重定向会让 list 回调收到 3xx 被 HttpErrorMiddleware 静默丢弃，
+        # 表现为「discovered=0 直接 finished」。这里开启内置重定向兜底。
+        "REDIRECT_ENABLED": True,
+        "REDIRECT_MAX_TIMES": 5,
         "AUTOTHROTTLE_ENABLED": True,
         "AUTOTHROTTLE_TARGET_CONCURRENCY": s.concurrency,
         "AUTOTHROTTLE_MAX_DELAY": s.autothrottle_max_delay,

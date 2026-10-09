@@ -12,6 +12,10 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
+import re
+
 import scrapy
 
 from newsagg.adapters import ensure_loaded, get_adapter
@@ -33,6 +37,24 @@ from newsagg.urls import normalize_url, url_hash
 
 log = get_logger()
 
+#: 纯 JS 跳转壳页：<script>location.href = "..."</script>
+#: 典型如 world.newssc.org（四川）——静态正文为空，真实稿件在
+#: h.xinhuaxmt.com 上，不跟随就只能存一条空壳记录。
+_JS_REDIRECT = re.compile(
+    r"""(?:location\.href|window\.location|location\.replace)\s*=\s*["']([^"']+)["']""",
+    re.I,
+)
+#: 壳页体积上限：正文页不可能只有这么点内容
+_SHELL_MAX_BYTES = 4096
+
+
+def js_redirect_target(text: str) -> str:
+    """壳页里唯一的 JS 跳转目标；非壳页返回空串。"""
+    if not text or len(text) > _SHELL_MAX_BYTES:
+        return ""
+    m = _JS_REDIRECT.search(text)
+    return m.group(1).strip() if m else ""
+
 
 class SiteSpider(scrapy.Spider):
     """单站点抓取蜘蛛。``session`` 由 engine 注入。"""
@@ -52,16 +74,29 @@ class SiteSpider(scrapy.Spider):
 
     # --- 入口 -------------------------------------------------------------
 
+    def _entry_urls(self) -> list[str]:
+        """本次任务的入口栏目页。
+
+        主栏目页之外，适配器可用 ``extra_column_urls`` 追加同站的其他新闻频道
+        （要闻/时政/本地…）。只爬一个栏目页时，很多省级站点只能拿到十几条候选，
+        扩频道是提升覆盖最直接的办法。
+        """
+        urls = [self.column_url]
+        extra = getattr(self.adapter, "extra_column_urls", ()) or ()
+        for u in extra:
+            if u and u not in urls:
+                urls.append(u)
+        return urls
+
     async def start(self):
         """Scrapy 2.13+ 的真实入口。"""
-        import sys
-        print(f"[SPIDER] start() called, column_url={self.column_url!r}", file=sys.stderr, flush=True)
-        yield scrapy.Request(self.column_url, callback=self.parse_list, dont_filter=True)
-        print("[SPIDER] start() yielded first request", file=sys.stderr, flush=True)
+        for u in self._entry_urls():
+            yield scrapy.Request(u, callback=self.parse_list, dont_filter=True)
 
     def start_requests(self):
         """兼容旧式入口。"""
-        yield scrapy.Request(self.column_url, callback=self.parse_list, dont_filter=True)
+        for u in self._entry_urls():
+            yield scrapy.Request(u, callback=self.parse_list, dont_filter=True)
 
     # --- 列表解析 ---------------------------------------------------------
 
@@ -141,6 +176,16 @@ class SiteSpider(scrapy.Spider):
             self.session.mark_task(url_hash, "skipped", skip_reason="non_text")
             return
 
+        # 纯 JS 跳转壳页：跟随真实稿件地址再解析一次（只跳一层）
+        target = js_redirect_target(response.text)
+        if target and not response.meta.get("js_redirected"):
+            yield response.follow(
+                target, callback=self.parse_detail,
+                cb_kwargs={"url_hash": url_hash},
+                meta={"js_redirected": True}, errback=self.on_error,
+            )
+            return
+
         detail = self.adapter.parse_detail(response.text, url=url)
         parsed = parse_published(detail.published_text, default_year=self.session.window.end_cst.year)
         if parsed.value is not None and parsed.value > self.session.window.end_cst:
@@ -155,13 +200,21 @@ class SiteSpider(scrapy.Spider):
         flags = quality_flags(paragraphs, is_media_only=detail.media_only)
         ch = content_hash(paragraphs)
         cst = parsed.value
+        # 时间可信度护栏：页脚/版权行里的年份会被误当成发布时间
+        # （实测出现过 1934、1956 这类荒谬值），越界即按未知处理。
+        if cst is not None and (
+            cst.year < 2000
+            or cst > self.session.window.end_cst + timedelta(days=1)
+        ):
+            cst = None
         utc = to_utc_naive(cst) if cst else None
         # 详情页标题缺失时，兜底用列表页标题
         title = clean_title(detail.title) or clean_title(self.session.list_title_for(nh))
         self.session.store_detail(
             url=normalize_url(url), url_hash=nh, title=title,
             paragraphs=paragraphs, source_name=clean_source(detail.source_name),
-            published_cst=cst, published_utc=utc, time_precision=parsed.precision,
+            published_cst=cst, published_utc=utc,
+            time_precision=(parsed.precision if cst else "unknown"),
             content_hash=ch, quality_flags=flags,
         )
 

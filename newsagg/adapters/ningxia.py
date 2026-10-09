@@ -13,7 +13,7 @@ class NingxiaAdapter(GenericAdapter):
     name = "ningxia"
     version = "1.0"
     allowed_hosts = ("www.ycen.com.cn",)
-    column_url = "http://www.ycen.com.cn"
+    column_url = "https://www.ycen.com.cn/"
 
 
 register(NingxiaAdapter())

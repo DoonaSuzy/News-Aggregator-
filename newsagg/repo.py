@@ -323,15 +323,30 @@ class Repository:
     # --- 候选 article_tasks ------------------------------------------------
 
     def upsert_discovered(self, conn, *, source_id: int, job_id: int,
-                          url_hash: str, url: str) -> bool:
-        """插入候选（幂等）。首次插入返回 True，已存在返回 False。"""
+                          url_hash: str, url: str,
+                          list_title: str = "") -> bool:
+        """插入候选（幂等）。首次插入返回 True，已存在返回 False。
+
+        已存在时若带了 ``list_title`` 而库里为空，顺手回填——列表页标题是
+        详情页标题缺失时的兜底来源，历史候选行也能因此被修复。
+        """
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT IGNORE INTO article_tasks "
-                "(source_id, job_id, discovered_url_hash, url) VALUES (%s,%s,%s,%s)",
-                (source_id, job_id, url_hash, url),
+                "(source_id, job_id, discovered_url_hash, url, list_title) "
+                "VALUES (%s,%s,%s,%s,%s)",
+                (source_id, job_id, url_hash, url, list_title or None),
             )
-            return cur.rowcount > 0
+            if cur.rowcount > 0:
+                return True
+            if list_title:
+                cur.execute(
+                    "UPDATE article_tasks SET list_title=%s "
+                    "WHERE source_id=%s AND discovered_url_hash=%s "
+                    "AND (list_title IS NULL OR list_title='')",
+                    (list_title, source_id, url_hash),
+                )
+            return False
 
     def mark_task(self, conn, *, source_id: int, url_hash: str, status: str,
                   skip_reason: str | None = None,

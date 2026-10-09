@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS article_tasks (
     job_id BIGINT UNSIGNED NULL,
     discovered_url_hash CHAR(64) NOT NULL,
     url VARCHAR(1024) NOT NULL,
+    list_title VARCHAR(512) NULL,
     status ENUM('pending', 'done', 'skipped', 'failed') NOT NULL DEFAULT 'pending',
     skip_reason VARCHAR(255) NULL,
     failure_class VARCHAR(64) NULL,

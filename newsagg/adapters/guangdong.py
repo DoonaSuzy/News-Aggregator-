@@ -13,7 +13,7 @@ class GuangdongAdapter(GenericAdapter):
     name = "guangdong"
     version = "1.0"
     allowed_hosts = ("www.southcn.com",)
-    column_url = "http://www.southcn.com"
+    column_url = "https://www.southcn.com/"
 
 
 register(GuangdongAdapter())

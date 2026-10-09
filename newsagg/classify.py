@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
-from newsagg.errors import JobTerminal, LeaseBusy, NotDue
+from newsagg.errors import LeaseBusy, NotDue
 
 
 class Decision(str, Enum):
@@ -60,10 +60,6 @@ def classify_delivery(snapshot: JobSnapshot, *, now_utc: datetime, owner: str) -
         and snapshot.lease_owner != owner
     ):
         raise LeaseBusy("他人持有有效租约")
-
-    # 终态守卫（异常路径）
-    if snapshot.status in _TERMINAL:
-        raise JobTerminal("任务已终态")
 
     return Decision.RUN
 

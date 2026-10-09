@@ -13,7 +13,10 @@ class JilinAdapter(GenericAdapter):
     name = "jilin"
     version = "1.0"
     allowed_hosts = ("www.cnjiwang.com",)
-    column_url = "http://www.cnjiwang.com"
+    column_url = "https://www.cnjiwang.com/"
+    extra_column_urls = (
+        "https://news.cnjiwang.com/",
+    )
 
 
 register(JilinAdapter())

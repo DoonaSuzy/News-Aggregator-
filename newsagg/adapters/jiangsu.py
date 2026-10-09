@@ -16,7 +16,7 @@ class JiangsuAdapter(GenericAdapter):
     name = "jiangsu"
     version = "1.0"
     allowed_hosts = ("www.jschina.com.cn", "jsnews.jschina.com.cn")
-    column_url = "http://www.jschina.com.cn"
+    column_url = "https://www.jschina.com.cn/"
 
     article_pattern = re.compile(r"jschina\.com\.cn.*?/\d{5,}/?|/\.s?html?$", re.I)
     body_selectors = (

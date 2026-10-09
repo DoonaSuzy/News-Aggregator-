@@ -28,7 +28,6 @@ from newsagg.timewindow import build_window, hourly_trigger_key
 log = get_logger()
 
 COORDINATOR_LOCK = "newsagg_coordinator"
-PUBLISH_LOCK = "newsagg_publish"
 #: GET_LOCK 等待超时（秒）
 LOCK_TIMEOUT = 5
 
@@ -252,6 +251,5 @@ __all__ = [
     "create_local_job",
     "owner_id",
     "COORDINATOR_LOCK",
-    "PUBLISH_LOCK",
 ]
 

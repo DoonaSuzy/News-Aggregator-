@@ -14,6 +14,10 @@ class GansudailyAdapter(GenericAdapter):
     version = "1.0"
     allowed_hosts = ("www.gansudaily.com.cn",)
     column_url = "http://www.gansudaily.com.cn"
+    extra_column_urls = (
+        "https://gansu.gansudaily.com.cn/",
+        "http://china.gansudaily.com.cn/guonyw/index.shtml",
+    )
 
 
 register(GansudailyAdapter())

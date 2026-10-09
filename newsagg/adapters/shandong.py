@@ -13,7 +13,7 @@ class ShandongAdapter(GenericAdapter):
     name = "shandong"
     version = "1.0"
     allowed_hosts = ("www.dzwww.com",)
-    column_url = "http://www.dzwww.com"
+    column_url = "https://www.dzwww.com/"
 
 
 register(ShandongAdapter())

@@ -13,7 +13,11 @@ class XinjiangAdapter(GenericAdapter):
     name = "xinjiang"
     version = "1.0"
     allowed_hosts = ("www.xinjiangnet.com.cn",)
-    column_url = "http://www.xinjiangnet.com.cn"
+    column_url = "https://www.xinjiangnet.com.cn/"
+    extra_column_urls = (
+        "https://www.xinjiangnet.com.cn/sy/jnxw/",
+        "https://www.xinjiangnet.com.cn/xjdz/",
+    )
 
 
 register(XinjiangAdapter())

@@ -13,7 +13,7 @@ class HebeiAdapter(GenericAdapter):
     name = "hebei"
     version = "1.0"
     allowed_hosts = ("www.hebnews.cn",)
-    column_url = "http://www.hebnews.cn"
+    column_url = "https://www.hebnews.cn/"
 
 
 register(HebeiAdapter())

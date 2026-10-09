@@ -19,6 +19,7 @@ import time
 from datetime import datetime
 
 from newsagg.classify import Decision, JobSnapshot, classify_delivery
+from newsagg.crawl.engine import worker_identity
 from newsagg.db import Database
 from newsagg.logutil import get_logger
 from newsagg.queue import StreamQueue
@@ -64,6 +65,9 @@ def _run_job_subprocess(job_id: int) -> int:
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env["NEWSAGG_OWNER"] = worker_identity()
     cmd = [python, "-m", "newsagg", "run-job", str(job_id)]
+    # 修复模式：整批重抓已发现候选以补齐标题/正文等元数据（由 supervisor 环境注入）
+    if os.environ.get("NEWSAGG_REFRESH") == "1":
+        cmd.append("--refresh")
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, encoding="utf-8",
@@ -128,11 +132,6 @@ def take_assignment(queue: StreamQueue, db: Database, owner: str) -> bool:
     return True
 
 
-def worker_identity() -> str:
-    """当前 worker 身份：主机名+PID（与 schedule.owner_id 一致）。"""
-    return owner_id()
-
-
 def run_worker() -> None:
     """worker 主循环。"""
     queue = StreamQueue()
@@ -143,12 +142,25 @@ def run_worker() -> None:
     log.info("worker %s 启动", owner)
     try:
         while True:
-            worked = take_assignment(queue, db, owner)
+            try:
+                worked = take_assignment(queue, db, owner)
+            except Exception as exc:  # noqa: BLE001
+                # Redis 阻塞读偶发 Timeout reading from socket（Memurai/旧版
+                # 服务器在 BLOCK 读上会超时）；不能让 worker 因此退出，
+                # 重建连接后继续消费。
+                log.warning("worker %s 消费异常，重连队列: %s", owner, exc)
+                time.sleep(2)
+                try:
+                    queue = StreamQueue()
+                    queue.ensure_group()
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
             if not worked:
                 time.sleep(1)
     except KeyboardInterrupt:
         log.info("worker %s 停止", owner)
 
 
-__all__ = ["run_worker", "take_assignment", "worker_identity"]
+__all__ = ["run_worker", "take_assignment"]
 

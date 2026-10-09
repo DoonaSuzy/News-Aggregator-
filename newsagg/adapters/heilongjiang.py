@@ -14,6 +14,10 @@ class HeilongjiangAdapter(GenericAdapter):
     version = "1.0"
     allowed_hosts = ("www.hljnews.cn",)
     column_url = "http://www.hljnews.cn"
+    extra_column_urls = (
+        "https://www.hljnews.cn/news/index.html",
+        "https://www.hljnews.cn/ljxw/index.html",
+    )
 
 
 register(HeilongjiangAdapter())

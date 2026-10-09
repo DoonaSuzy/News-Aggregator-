@@ -14,6 +14,11 @@ class HainanAdapter(GenericAdapter):
     version = "1.0"
     allowed_hosts = ("www.hinews.cn",)
     column_url = "http://www.hinews.cn"
+    extra_column_urls = (
+        "http://www.hinews.cn/module",
+        "http://www.hinews.cn/module/b0ba0a6167674227932bbeca1cc20e77",
+        "http://www.hinews.cn/module/5ee709aa070c42ee8de5229dd5263b57",
+    )
 
 
 register(HainanAdapter())

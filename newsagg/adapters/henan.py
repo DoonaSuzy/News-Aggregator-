@@ -13,7 +13,7 @@ class HenanAdapter(GenericAdapter):
     name = "henan"
     version = "1.0"
     allowed_hosts = ("www.dahe.cn",)
-    column_url = "http://www.dahe.cn"
+    column_url = "https://www.dahe.cn/"
 
 
 register(HenanAdapter())
