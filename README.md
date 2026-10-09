@@ -19,39 +19,49 @@
 | 配置 | `python-dotenv` | `.env` 注入环境变量 |
 | 测试 | `pytest` + `fakeredis` + `freezegun` | 无外部依赖单测 |
 
-> 说明：项目核心为**自研的请求/解析/存储管线**（`newsagg.crawl` / `newsagg.adapters` /
-> `newsagg.writer`），Scrapy 仅作为解析器与异步反应器底层被间接使用，便于精确控制
-> 每站点的抓取预算与租约。
+> 说明：采集层基于 **Scrapy Spider**（`newsagg.crawl.spider`，`async start()` 异步入口），
+> 由 `crawl/settings.py` 配置 Asyncio 反应器、并发 8、AutoThrottle 与限流槽，
+> 两个自定义中间件（`AccessPolicyMiddleware`/`PaceMiddleware`）负责 robots 决策与站点限速。
+> 每站点的抓取预算与 MySQL 租约由 `crawl/session.py` 精确控制。
 
 ---
 
 ## 2. 架构与模块划分
 
 ```
-scheduler ──┬─> MySQL(crawl_jobs)     建批 + 租约认领
-            └─> Redis Stream(queue) ──> worker ──> SiteCrawler ──> MySQL(articles)
-                                          │
-                                          └─> classify 决定 run / wait / ack
+schedule ──┬─> MySQL(crawl_runs/crawl_jobs)      建批（GET_LOCK 幂等）
+           └─> Redis Stream(queue) ──> worker ──> classify(run/wait/ack)
+                                                  │  RUN：子进程
+                                                  ▼
+                            crawl/engine ──> CrawlSession + SiteSpider(Scrapy)
+                                                  │  收尾（令牌断言）
+                                                  ▼
+                                          repo ──> MySQL(articles)
 ```
 
 | 模块 | 职责 |
 | --- | --- |
 | `newsagg/config.py` | 环境变量 → `Settings` 单例 |
 | `newsagg/provinces.py` | 31 省行政区划代码表 |
-| `newsagg/urls.py` | 各来源列表/详情 URL 归一化 |
+| `newsagg/urls.py` | 各来源列表/详情 URL 归一化与稳定哈希 |
 | `newsagg/adapters/*` | 每站点解析器（34 个 adapter），共用 `base`/`_common`/`listing` |
-| `newsagg/crawl/http.py` | 受控 HTTP 客户端（超时、UA、重试） |
-| `newsagg/crawl/robots.py` | `robots.txt` 解析与遵守 |
-| `newsagg/crawl/sampler.py` | 抓取速率 / 预算控制 |
-| `newsagg/crawl/mimetypes.py` | 内容类型判定 |
+| `newsagg/crawl/spider.py` | `SiteSpider`（Scrapy Spider，`async start()` 真实入口） |
+| `newsagg/crawl/session.py` | 一次任务的运行时状态：租约续期、候选去重、窗口判定、阻断冷却 |
+| `newsagg/crawl/engine.py` | 开会话、跑蜘蛛、收尾 XACK 前提交；`run_blocking()` 同步入口 |
+| `newsagg/crawl/settings.py` | Scrapy 设置：Asyncio 反应器、并发 8、AutoThrottle、guizhou 限流槽 |
+| `newsagg/crawl/middlewares.py` | `AccessPolicyMiddleware`(robots/阻断) + `PaceMiddleware`(限速) |
+| `newsagg/crawl/sampler.py` | 失败/空页样本落盘 |
+| `newsagg/crawl/mimetypes.py` | 内容类型判定（识别纯媒体页） |
 | `newsagg/cleaning.py` | 标题/来源/正文清洗 + `content_hash` |
 | `newsagg/timewindow.py` | 时间窗口、整点触发键、UTC/CST 归一化 |
 | `newsagg/classify.py` | 投递决策（run / wait / ack） |
-| `newsagg/scheduler.py` | 建批、分发、租约认领 |
+| `newsagg/repo.py` | 全部持久化：来源/批次/任务/租约/文章/审计的唯一 SQL 落点 |
+| `newsagg/schedule.py` | 协调器：`run_coordinator()` 建批 + `publish_jobs()` 分发 |
 | `newsagg/queue.py` | Redis Stream 封装 |
-| `newsagg/worker.py` | 消费队列，驱动站点爬虫 |
-| `newsagg/sitespider.py` | 单来源爬取主流程 |
-| `newsagg/writer.py` | 文章去重落库 |
+| `newsagg/worker.py` | `take_assignment()` 消费队列，RUN 任务交子进程跑蜘蛛 |
+| `newsagg/supervisor.py` | 常驻监督，维持 `worker_count` 个 worker 子进程 |
+| `newsagg/query.py` | 文章检索（省份/日期/关键词/时间未知筛选 + 分页） |
+| `newsagg/stats.py` | 采集统计与逐来源状态渲染 |
 | `newsagg/recrawl.py` | 手动重抓 |
 | `newsagg/export.py` | CSV 导出 |
 | `newsagg/db.py` | 连接工厂、建表、省份/来源种子 |
@@ -126,15 +136,26 @@ newsagg selfcheck    # 校验 MySQL / Redis 连通性
 ## 4. 使用（CLI）
 
 ```bash
-newsagg jobs                 # 建批并分发（整点调度入口）
-newsagg run-worker           # 常驻 worker 消费 Stream（按 NEWSAGG_WORKER_COUNT 拉起）
-newsagg tick                 # 单轮 调度 + 消费（供 cron 调用）
+newsagg init-db              # 建表 + 写入 31 省与候选来源种子
+newsagg selfcheck            # 校验 MySQL / Redis 连通性
+newsagg coordinator          # 整点建批并分发（NewsAggCoordinator 计划任务入口）
+newsagg supervisor           # 常驻监督，维持 N 个 worker（NewsAggSupervisor 计划任务入口）
+newsagg worker               # 单个 worker 进程（take_assignment 消费 Stream）
+newsagg run-worker           # 前台拉起 NEWSAGG_WORKER_COUNT 个 worker（开发调试）
+newsagg tick                 # 单轮 建批 + 消费（供 cron 调用）
+newsagg crawl-once <job_id>  # 同步跑单任务（engine.run_blocking，开发调试）
 newsagg run-job <job_id>     # 单任务运行（不消费队列）
 newsagg status               # 查看任务/队列概览
 newsagg sources              # 列出所有来源与状态
+newsagg enable-source <adapter>   # 启用某来源（要求库内已有文章）
+newsagg resume-source <adapter>   # 恢复被暂停来源
+newsagg query --province 江苏 --keyword 经济   # 文章检索
+newsagg show <article_id>    # 查看单篇文章
+newsagg stats                # 采集统计与逐来源状态
 newsagg recrawl <adapter> --days 7   # 手动重抓某来源
 newsagg export --out out.csv # 导出文章 CSV
-newsagg serve                # 前台 调度器 + worker（开发调试）
+newsagg check                # 环境自检
+newsagg serve                # 前台 协调器 + worker（开发调试）
 ```
 
 ---
@@ -153,8 +174,15 @@ newsagg serve                # 前台 调度器 + worker（开发调试）
 
 ```
 newsagg/            主包
-  adapters/         34 个省级站点解析器 + 公共基类
-  crawl/            HTTP / robots / 速率 / mimetype
+  adapters/         34 个省级站点解析器 + 公共基类（base/_common/listing）
+  crawl/            Scrapy 采集子包
+                     spider / session / engine / settings / middlewares
+                     + sampler / mimetypes 辅助
+  repo.py           全部持久化（唯一 SQL 落点）
+  schedule.py       协调器建批与分发
+  worker.py         take_assignment 消费队列
+  supervisor.py     常驻监督
+  query.py / stats.py / export.py / recrawl.py / classify.py ...
 tests/              pytest 用例 + HTML 夹具
 sql/schema.sql      建表脚本
 scripts/            start_services.ps1 本地依赖启动
