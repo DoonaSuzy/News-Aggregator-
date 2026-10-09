@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "newsagg"
+version = "0.1.0"
+description = "中国大陆31省官方新闻聚合工具（省级新闻聚合爬虫）"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "scrapy==2.19.0",
+    "redis==8.1.0",
+    "PyMySQL==1.2.3",
+    "python-dotenv==1.2.4",
+    "tzdata==2026.5",
+    "parsel==1.12.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "fakeredis==2.39.0",
+    "freezegun==1.5.1",
+]
+
+[project.scripts]
+newsagg = "newsagg.cli:main"
+
+[tool.setuptools]
+packages = ["newsagg", "newsagg.crawl", "newsagg.adapters"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

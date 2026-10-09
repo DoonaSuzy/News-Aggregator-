@@ -1,0 +1,42 @@
+# 虚拟环境
+.venv/
+venv/
+
+# 本地环境变量与密码
+.env
+
+# 运行产物
+logs/
+*.log
+
+# 失败页样本 / 导出
+logs/*.html
+logs/*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 打包产物
+dist/
+build/
+*.egg-info/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 本机开发依赖数据 / 内置二进制（不入库）
+.redis5/
+.mysqldata/
+
+# 一次性调试脚本与运行产物
+_probe.py
+_e2e.py
+_batch.py
+_patch.py
+*.spawn.out.log

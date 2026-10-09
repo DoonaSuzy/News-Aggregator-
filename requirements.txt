@@ -1,0 +1,13 @@
+# 运行依赖
+scrapy==2.19.0
+redis==8.1.0
+PyMySQL==1.2.3
+python-dotenv==1.2.4
+tzdata==2026.5
+parsel==1.12.1
+
+# 开发 / 测试依赖（等价于 pip install -e ".[dev]"）
+pytest==9.1.1
+fakeredis==2.39.0
+freezegun==1.5.1
+
