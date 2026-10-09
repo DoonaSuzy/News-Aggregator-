@@ -13,6 +13,7 @@ flask>=3.0
 SQLAlchemy[asyncio]>=2.0
 aiomysql>=0.2
 PyMySQL>=1.1            # 同步驱动 / 迁移辅助
+cryptography>=41.0      # MySQL8 caching_sha2_password 认证必需（RSA 加密密码）
 alembic>=1.13           # 迁移工具（可选）
 
 # 数据校验与配置
