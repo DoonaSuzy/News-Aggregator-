@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ app_name }} · 管理后台</title>
+  <style>
+    body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+           margin: 0; background: #f5f6f8; color: #222; }
+    header { background: #1f2937; color: #fff; padding: 16px 24px; }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    main { padding: 24px; max-width: 960px; margin: 0 auto; }
+    .card { background: #fff; border-radius: 10px; padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 16px; }
+    .metric { text-align: center; }
+    .metric .num { font-size: 28px; font-weight: 700; color: #2563eb; }
+    .metric .lbl { color: #6b7280; font-size: 13px; margin-top: 4px; }
+    a.btn { display: inline-block; margin-top: 8px; padding: 8px 14px;
+            background: #2563eb; color: #fff; border-radius: 6px;
+            text-decoration: none; font-size: 14px; }
+    .muted { color: #9ca3af; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header><h1>{{ app_name }} · 管理后台</h1></header>
+  <main>
+    <div class="card">
+      <div class="grid" id="metrics">
+        <div class="metric"><div class="num" id="m-articles">—</div><div class="lbl">文章总数</div></div>
+        <div class="metric"><div class="num" id="m-sources">—</div><div class="lbl">来源数</div></div>
+        <div class="metric"><div class="num" id="m-enabled">—</div><div class="lbl">启用来源</div></div>
+        <div class="metric"><div class="num" id="m-provinces">—</div><div class="lbl">覆盖省份</div></div>
+      </div>
+      <p class="muted">数据来自核心服务总览接口 <code>/api/v1/stats/overview</code>。</p>
+      <a class="btn" href="/docs" target="_blank" rel="noopener">查看 API 文档</a>
+    </div>
+    <div class="card">
+      <strong>运维入口</strong>
+      <ul>
+        <li>FastAPI 文档：<code>http://&lt;host&gt;:8000/docs</code></li>
+        <li>本后台健康检查：<code>/healthz</code></li>
+      </ul>
+    </div>
+  </main>
+  <script>
+    async function load() {
+      try {
+        const r = await fetch('/api/status');
+        const j = await r.json();
+        const d = j.data || {};
+        document.getElementById('m-articles').textContent = d.total_articles ?? '—';
+        document.getElementById('m-sources').textContent = d.total_sources ?? '—';
+        document.getElementById('m-enabled').textContent = d.enabled_sources ?? '—';
+        document.getElementById('m-provinces').textContent = d.provinces_with_data ?? '—';
+      } catch (e) {
+        document.querySelectorAll('.num').forEach(n => n.textContent = '×');
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

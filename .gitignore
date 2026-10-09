@@ -44,3 +44,8 @@ _e2e.py
 _batch.py
 _patch.py
 *.spawn.out.log
+
+# 数据中台：本地密码文件（模板 .env.platform.example 仍入库）
+newsplatform/.env.platform
+**/.env.platform
+

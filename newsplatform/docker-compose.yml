@@ -1,0 +1,92 @@
+# 数据中台容器编排：FastAPI + Flask + MySQL + Redis
+# 用法：docker compose --env-file .env.platform up -d --build
+# 说明：服务间通过自定义网络 newsagg-net 以服务名互访；数据库/缓存不对外暴露端口（可选）。
+
+name: newsagg-platform
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: newsagg-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_dev_pwd}
+      MYSQL_DATABASE: ${PLATFORM_DB_NAME:-newsagg_platform}
+      MYSQL_USER: ${PLATFORM_DB_USER:-platform}
+      MYSQL_PASSWORD: ${PLATFORM_DB_PASSWORD:-platform_dev_pwd}
+      TZ: Asia/Shanghai
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_0900_ai_ci
+      --default-time-zone=+00:00
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 首次初始化自动建表（仅空库时执行一次）
+      - ../sql/platform_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot",
+             "-p${MYSQL_ROOT_PASSWORD:-root_dev_pwd}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [newsagg-net]
+
+  redis:
+    image: redis:7-alpine
+    container_name: newsagg-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", ""]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [newsagg-net]
+
+  fastapi:
+    build:
+      context: ..
+      dockerfile: newsplatform/Dockerfile
+    container_name: newsagg-fastapi
+    restart: unless-stopped
+    env_file:
+      - .env.platform
+    environment:
+      PLATFORM_DB_HOST: mysql
+      PLATFORM_REDIS_URL: redis://redis:6379/0
+      PLATFORM_ENV: ${PLATFORM_ENV:-production}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${FASTAPI_PORT:-8000}:8000"
+    networks: [newsagg-net]
+
+  flask:
+    build:
+      context: ..
+      dockerfile: newsplatform/Dockerfile.flask
+    container_name: newsagg-flask
+    restart: unless-stopped
+    environment:
+      FASTAPI_INTERNAL_URL: http://fastapi:8000
+      PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET:-change-me}
+    depends_on:
+      fastapi:
+        condition: service_started
+    ports:
+      - "${FLASK_PORT:-5000}:5000"
+    networks: [newsagg-net]
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  newsagg-net:
+    driver: bridge
