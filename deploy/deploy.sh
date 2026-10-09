@@ -8,6 +8,7 @@
 set -euo pipefail
 
 log() { echo -e "\033[1;32m[deploy]\033[0m $*"; }
+warn() { echo -e "\033[1;33m[warn]\033[0m $*"; }
 err() { echo -e "\033[1;31m[error]\033[0m $*" >&2; }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
