@@ -4,7 +4,6 @@
 构造一次抓取批次（``crawl-once``）的 :class:`CrawlerRunner` 设置。
 
 设计约定（见文档 §2.3）：
-- Asyncio 反应器（已在 ``newsagg/__init__.py`` 安装）。
 - 并发 8，``DOWNLOAD_TIMEOUT`` 30。
 - AutoThrottle：目标并发 8，最大延迟 60。
 - 关 Cookie（站点无登录态）。
@@ -12,6 +11,10 @@
 - 关闭 Scrapy 重定向中间件（重定向由蜘蛛自行判定归属）。
 - 注册 ``AccessPolicyMiddleware``(560) 与 ``PaceMiddleware``(590)。
 - ``DOWNLOAD_SLOTS`` 给 guizhou 单独限流。
+
+反应器：不覆盖 ``TWISTED_REACTOR``。实测在 Windows + Python 3.13 +
+Twisted 26.4.0 下，强制 ``AsyncioSelectorReactor`` 会让异步蜘蛛
+``async start()`` 挂起；Twisted 默认的 Windows 反应器可正常驱动。
 """
 
 from __future__ import annotations
@@ -29,7 +32,6 @@ def scrapy_settings(*, overrides: dict | None = None) -> dict:
     """返回一份 Scrapy 设置字典。"""
     s = get_settings()
     settings = {
-        "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
         "CONCURRENT_REQUESTS": s.concurrency,
         "CONCURRENT_REQUESTS_PER_DOMAIN": s.concurrency,
         "DOWNLOAD_TIMEOUT": s.download_timeout,

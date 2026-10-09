@@ -54,7 +54,10 @@ class SiteSpider(scrapy.Spider):
 
     async def start(self):
         """Scrapy 2.13+ 的真实入口。"""
+        import sys
+        print(f"[SPIDER] start() called, column_url={self.column_url!r}", file=sys.stderr, flush=True)
         yield scrapy.Request(self.column_url, callback=self.parse_list, dont_filter=True)
+        print("[SPIDER] start() yielded first request", file=sys.stderr, flush=True)
 
     def start_requests(self):
         """兼容旧式入口。"""
@@ -89,7 +92,9 @@ class SiteSpider(scrapy.Spider):
             if self._guard():
                 return
             nh = url_hash(item.url)
-            self.session.consider(item.url, nh)
+            # consider 返回 False 表示已抓过（布隆/库内去重），跳过 HTTP 请求
+            if not self.session.consider(item.url, nh, list_title=item.title):
+                continue
             yield response.follow(item.url, callback=self.parse_detail,
                                   cb_kwargs={"url_hash": nh},
                                   errback=self.on_error)
@@ -151,8 +156,10 @@ class SiteSpider(scrapy.Spider):
         ch = content_hash(paragraphs)
         cst = parsed.value
         utc = to_utc_naive(cst) if cst else None
+        # 详情页标题缺失时，兜底用列表页标题
+        title = clean_title(detail.title) or clean_title(self.session.list_title_for(nh))
         self.session.store_detail(
-            url=normalize_url(url), url_hash=nh, title=clean_title(detail.title),
+            url=normalize_url(url), url_hash=nh, title=title,
             paragraphs=paragraphs, source_name=clean_source(detail.source_name),
             published_cst=cst, published_utc=utc, time_precision=parsed.precision,
             content_hash=ch, quality_flags=flags,

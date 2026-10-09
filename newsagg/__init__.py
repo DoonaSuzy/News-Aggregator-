@@ -1,29 +1,18 @@
 """newsagg 顶层包。
 
-在任何模块导入 ``twisted.internet.reactor`` 之前安装 AsyncioSelectorReactor
-（Scrapy 2.19 的异步蜘蛛入口 ``async start()`` 需要 asyncio 反应器）。
+不强制安装反应器：Scrapy 2.19 的异步蜘蛛入口 ``async start()`` 使用
+Twisted 默认反应器即可，无需（也不应）强制 asyncio 反应器——详见下方说明。
 """
 
 from __future__ import annotations
 
 __version__ = "0.1.0"
 
-# --- 反应器安装（必须在任何 twisted reactor 导入之前） -------------------
-import asyncio  # noqa: E402
-
-try:  # pragma: no cover - 取决于安装环境
-    from scrapy.utils.reactor import install_reactor
-
-    install_reactor("twisted.internet.asyncioreactor.AsyncioSelectorReactor")
-except Exception:  # pragma: no cover
-    # 已经安装过反应器（重复导入）时忽略
-    pass
-
-# 确保事件循环策略在 Windows 上可用
-if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):  # pragma: no cover
-    try:
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except Exception:
-        pass
+# --- 反应器说明 -----------------------------------------------------------
+# 不在导入期强制安装 asyncio 反应器。实测在 Windows + Python 3.13 +
+# Twisted 26.4.0 下，AsyncioSelectorReactor 会让 Scrapy 的异步蜘蛛
+# ``async start()`` 挂起（事件循环不与 Twisted 正确对接，首请求永不发出）。
+# Twisted 默认的 Windows selectreactor 能正常驱动异步蜘蛛，故交由 Scrapy
+# 自行选择反应器（见 crawl/settings.py 不再覆盖 TWISTED_REACTOR）。
 
 __all__ = ["__version__"]

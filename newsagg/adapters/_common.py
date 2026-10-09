@@ -16,6 +16,7 @@ from parsel import Selector
 
 from newsagg.adapters.base import DetailParse, ListItem, ListParse
 from newsagg.adapters.listing import mark_sticky
+from newsagg.cleaning import clean_title, extract_source, looks_like_source
 
 
 # 详情 URL 常见特征（需命中其一且不在排除列表）
@@ -116,9 +117,10 @@ class GenericAdapter:
 
     def parse_detail(self, html: str, *, url: str) -> DetailParse:
         sel = Selector(text=html)
-        title = self._first_text(sel, self.title_selectors)
+        title = self._first_text(sel, self.title_selectors) or self._title_from_head(sel)
         paragraphs = self._extract_paragraphs(sel)
-        source_name = self._first_text(sel, self.source_selectors)
+        raw_source = self._first_text(sel, self.source_selectors)
+        source_name = self._clean_source(raw_source)
         published_text = self._first_text(sel, self.time_selectors)
         if not published_text:
             published_text = self._scan_time_in_text(html)
@@ -130,6 +132,28 @@ class GenericAdapter:
             published_text=published_text,
             media_only=media_only,
         )
+
+    def _title_from_head(self, sel: Selector) -> str:
+        """标题兜底：先 og:title，再 <title>（去掉站点名后缀）。"""
+        og = sel.css("meta[property='og:title']::attr(content)").get()
+        if og and len(og.strip()) >= 4:
+            return og.strip()
+        t = sel.css("title::text").get()
+        if t:
+            t = clean_title(t)
+            # 去掉常见「标题 - 站点名」/「标题_站点名」后缀
+            t = re.split(r"\s+[-_|—]\s+", t)[0].strip()
+            if len(t) >= 4:
+                return t
+        return ""
+
+    def _clean_source(self, raw: str) -> str:
+        """用 extract_source 清洗；结果不像媒体名则丢弃。"""
+        cleaned = extract_source(raw)
+        if cleaned and looks_like_source(cleaned):
+            return cleaned
+        return cleaned if cleaned and len(cleaned) <= 20 else ""
+
 
     def _extract_paragraphs(self, sel: Selector) -> list[str]:
         for selector in self.body_selectors:

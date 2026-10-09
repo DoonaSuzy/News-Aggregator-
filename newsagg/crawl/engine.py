@@ -39,21 +39,34 @@ def worker_identity() -> str:
 def runner(**overrides):
     """返回配置好的 ``CrawlerRunner``。"""
     from scrapy.crawler import CrawlerRunner
-    from scrapy.utils.project import get_project_settings
-    from scrapy.utils.log import configure_logging
 
     # 复用 scrapy_settings()，屏蔽 Scrapy 自身日志
-    settings = scrapy_settings(overrides=overrides or None)
-    return CrawlerRunner(settings)
+    return CrawlerRunner(scrapy_settings(**overrides))
+
+
+def _build_bloom():
+    """构造 URL 布隆过滤器（Redis 位图）。Redis 不可用时返回 None（退化为纯 DB 去重）。"""
+    from newsagg.crawl.dedup import UrlBloom
+
+    try:
+        queue = StreamQueue()
+        return UrlBloom(queue.client)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("布隆过滤器不可用，退化为库内去重: %s", exc)
+        return None
 
 
 def open_session(job_id: int, *, db: Database | None = None,
-                 owner: str | None = None) -> CrawlSession:
+                 owner: str | None = None, bloom=None,
+                 refresh: bool = False) -> CrawlSession:
     """取租约并构造会话。终态/被他人持有时抛出对应异常。"""
     settings = get_settings()
     db = db or Database()
     repo = Repository(db)
     owner = owner or worker_identity()
+
+    if bloom is None:
+        bloom = _build_bloom()
 
     conn = db.connect()
     try:
@@ -80,47 +93,34 @@ def open_session(job_id: int, *, db: Database | None = None,
     window = Window(job_row.window_start_cst, job_row.window_end_cst, job_row.job_type)
     return CrawlSession(
         job_id, source_id=int(meta["id"]), window=window, lease_token=lease.token,
-        owner=owner, adapter_name=meta["adapter_name"], db=db, repo=repo,
+        owner=owner, adapter_name=meta["adapter_name"], db=db, repo=repo, bloom=bloom,
+        refresh=refresh,
     )
 
 
-def run_blocking(job_id: int, *, db: Database | None = None, owner: str | None = None) -> dict:
+def run_blocking(job_id: int, *, db: Database | None = None, owner: str | None = None,
+                 refresh: bool = False) -> dict:
     """同步跑一个任务并等待完成，写终态，返回统计。
 
     每个任务在独立进程内调用本函数（Twisted 反应器不可在同一进程重启），
     队列 XACK 由调用方（父进程 worker）在子进程写终态成功后统一执行。
+
+    ``refresh=True`` 时启用修复模式：强制重抓已发现候选以修复元数据列。
     """
-    import asyncio
+    from scrapy.crawler import CrawlerProcess
 
-    from twisted.internet import reactor, defer
-    from scrapy.utils.reactor import install_reactor
-
-    # 确保反应器已安装（幂等）
-    try:
-        install_reactor("twisted.internet.asyncioreactor.AsyncioSelectorReactor")
-    except Exception:
-        pass  # 已安装
-
-    session = open_session(job_id, db=db, owner=owner)
+    session = open_session(job_id, db=db, owner=owner, refresh=refresh)
     column_url = _column_url(session)
-    runner_obj = runner()
 
-    @defer.inlineCallbacks
-    def _run():
-        try:
-            yield runner_obj.crawl(
-                SiteSpider(session=session, column_url=column_url),
-            )
-        finally:
-            # CrawlerRunner 不会自行停止反应器；抓取结束后必须 stop，
-            # 否则 reactor.run() 永不返回。
-            from twisted.internet import reactor as _reactor
-            _reactor.stop()
+    # CrawlerProcess 自管反应器生命周期（含安装/运行/停止），
+    # stop_after_crawl=True 保证抓取结束后 reactor 停止、本函数返回。
+    process = CrawlerProcess(scrapy_settings())
 
     session.start_renewal()
     try:
-        reactor.callWhenRunning(_run)
-        reactor.run()
+        # Scrapy 2.13+ 的 crawl() 只接受蜘蛛“类”+ 构造参数，不接受实例。
+        process.crawl(SiteSpider, session=session, column_url=column_url)
+        process.start(stop_after_crawl=True)
     finally:
         session.stop_renewal()
 

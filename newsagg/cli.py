@@ -40,24 +40,42 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_rj = sub.add_parser("run-job", help="单任务运行（不消费队列）")
     p_rj.add_argument("job_id", type=int)
+    p_rj.add_argument("--refresh", action="store_true",
+                      help="修复模式：强制重抓已发现候选，修复标题/来源/时间等元数据列")
 
     p_co = sub.add_parser("crawl-once", help="同步抓取单个任务并等待完成")
-    p_co.add_argument("job_id", type=int)
+    p_co.add_argument("job_id", nargs="?", type=int, default=None,
+                      help="任务 id（与 --adapter 二选一；都缺省时抓 jiangsu）")
+    p_co.add_argument("--adapter", default=None,
+                      help="按 adapter 名新建本地手动任务并立即抓取（缺省 jiangsu）")
+    p_co.add_argument("--refresh", action="store_true",
+                      help="修复模式：强制重抓已发现候选以修复元数据列")
 
     p_rc = sub.add_parser("recrawl", help="手动重抓某来源")
     p_rc.add_argument("adapter", help="adapter 名称")
-    p_rc.add_argument("--days", type=int, default=7)
+    p_rc.add_argument("--days", type=int, default=None, help="重抓天数（与 --from/--to 互斥）")
+    p_rc.add_argument("--from", dest="date_from", default=None, help="起始日期 YYYY-MM-DD")
+    p_rc.add_argument("--to", dest="date_to", default=None, help="结束日期 YYYY-MM-DD")
 
     p_exp = sub.add_parser("export", help="导出文章 CSV")
     p_exp.add_argument("--out", default="newsagg_export.csv")
+    p_exp.add_argument("--province", default=None)
+    p_exp.add_argument("--from", dest="date_from", default=None)
+    p_exp.add_argument("--to", dest="date_to", default=None)
+    p_exp.add_argument("--keyword", default=None)
 
     p_q = sub.add_parser("query", help="检索文章")
     p_q.add_argument("--province", default=None, help="省份代码或名称")
     p_q.add_argument("--date", default=None, help="日期 YYYY-MM-DD（北京时间）")
+    p_q.add_argument("--from", dest="date_from", default=None, help="起始日期 YYYY-MM-DD")
+    p_q.add_argument("--to", dest="date_to", default=None, help="结束日期 YYYY-MM-DD")
     p_q.add_argument("--keyword", default=None, help="标题/正文关键词")
+    p_q.add_argument("--body-only", action="store_true", help="关键词仅匹配正文")
     p_q.add_argument("--unknown-time", action="store_true", help="仅日期未确认")
     p_q.add_argument("--limit", type=int, default=20)
     p_q.add_argument("--offset", type=int, default=0)
+    p_q.add_argument("--page", type=int, default=None, help="页码（从 1 开始）")
+    p_q.add_argument("--page-size", type=int, default=None, help="每页条数")
 
     p_show = sub.add_parser("show", help="查看文章详情")
     p_show.add_argument("article_id", type=int)
@@ -99,9 +117,9 @@ def _dispatch(args) -> int:
         "supervisor": lambda: _cmd_supervisor(),
         "tick": lambda: _cmd_tick(args.force),
         "run-worker": lambda: _cmd_run_worker(args.workers),
-        "run-job": lambda: _cmd_run_job(args.job_id),
-        "crawl-once": lambda: _cmd_crawl_once(args.job_id),
-        "recrawl": lambda: _cmd_recrawl(args.adapter, args.days),
+        "run-job": lambda: _cmd_run_job(args.job_id, args.refresh),
+        "crawl-once": lambda: _cmd_crawl_once(job_id=args.job_id, adapter=args.adapter, refresh=args.refresh),
+        "recrawl": lambda: _cmd_recrawl(args.adapter, days=args.days, date_from=args.date_from, date_to=args.date_to),
         "export": lambda: _cmd_export(args.out),
         "query": lambda: _cmd_query(args),
         "show": lambda: _cmd_show(args.article_id),
@@ -177,11 +195,19 @@ def _cmd_supervisor() -> int:
     return 0
 
 
-def _cmd_crawl_once(job_id: int) -> int:
+def _cmd_crawl_once(adapter: str | None = None, refresh: bool = False,
+                    job_id: int | None = None) -> int:
     """同步抓取单个任务并等待完成（不消费队列，直接跑 Scrapy 引擎）。"""
     from newsagg.crawl.engine import run_blocking
+    from newsagg.schedule import create_manual_job
 
-    stats = run_blocking(job_id)
+    if adapter:
+        job_id = create_manual_job(adapter)
+        log.info("已创建手动任务: job_id=%s", job_id)
+    if job_id is None:
+        log.error("请指定 job_id 或 --adapter")
+        return 1
+    stats = run_blocking(job_id, refresh=refresh)
     log.info("crawl-once job %s: %s", job_id, stats)
     return 0
 
@@ -190,9 +216,17 @@ def _cmd_query(args) -> int:
     from newsagg.db import Database
     from newsagg.query import ArticleFilter, ArticleQuery, flags_text, format_cst
 
+    limit = args.limit
+    offset = args.offset
+    if args.page is not None:
+        page_size = args.page_size or args.limit
+        limit = page_size
+        offset = (args.page - 1) * page_size
     flt = ArticleFilter(
         province=args.province, day=args.date, keyword=args.keyword,
-        unknown_time=args.unknown_time, limit=args.limit, offset=args.offset,
+        date_from=args.date_from, date_to=args.date_to,
+        body_only=args.body_only,
+        unknown_time=args.unknown_time, limit=limit, offset=offset,
     )
     q = ArticleQuery()
     conn = Database().connect()
@@ -330,17 +364,25 @@ def _cmd_run_worker(workers: int | None) -> int:
     return 0
 
 
-def _cmd_run_job(job_id: int) -> int:
+def _cmd_run_job(job_id: int, refresh: bool = False) -> int:
     from newsagg.crawl.engine import run_blocking
 
-    log.info("job %s: %s", job_id, run_blocking(job_id))
+    log.info("job %s: %s", job_id, run_blocking(job_id, refresh=refresh))
     return 0
 
 
-def _cmd_recrawl(adapter: str, days: int) -> int:
+def _cmd_recrawl(adapter: str, days: int | None = None,
+                 date_from: str | None = None, date_to: str | None = None) -> int:
     from newsagg.schedule import create_manual_job
 
-    log.info("manual_recrawl 任务已建: job_id=%s", create_manual_job(adapter, days=days))
+    kwargs: dict = {}
+    if date_from and date_to:
+        kwargs["date_from"] = date_from
+        kwargs["date_to"] = date_to
+    else:
+        kwargs["days"] = days or 7
+    job_id = create_manual_job(adapter, **kwargs)
+    log.info("manual_recrawl 任务已建: job_id=%s", job_id)
     return 0
 
 

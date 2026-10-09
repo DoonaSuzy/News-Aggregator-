@@ -1,13 +1,21 @@
-"""文章导出 CSV。"""
+"""文章导出 CSV。
+
+可选传入 :class:`~newsagg.query.ArticleFilter` 按省份/日期区间/关键词筛选
+（与 ``query`` 命令共用同一 ``build_where``，语义一致）；不传则导出全表。
+"""
 
 from __future__ import annotations
 
 import csv
 import os
+from typing import TYPE_CHECKING
 
 from newsagg.cleaning import csv_cell
 from newsagg.config import get_settings
 from newsagg.db import Database
+
+if TYPE_CHECKING:
+    from newsagg.query import ArticleFilter
 
 COLUMNS = [
     "id", "province_code", "province_name", "adapter_name", "media_name",
@@ -16,11 +24,17 @@ COLUMNS = [
 ]
 
 
-def export_csv(out_path: str) -> str:
+def export_csv(out_path: str, flt: "ArticleFilter | None" = None) -> str:
     settings = get_settings()
     root = settings.root
     if not os.path.isabs(out_path):
         out_path = os.path.join(str(root), out_path)
+
+    clause, params = ("", [])
+    if flt is not None:
+        from newsagg.query import build_where
+
+        clause, params = build_where(flt)
 
     conn = Database().connect()
     try:
@@ -30,8 +44,9 @@ def export_csv(out_path: str) -> str:
                 "s.adapter_name, s.media_name, a.title, a.url, a.published_at_cst, "
                 "a.time_precision, a.source_name, a.quality_flags, a.body_text "
                 "FROM articles a JOIN sources s ON s.id = a.source_id "
-                "LEFT JOIN provinces p ON p.code = s.province_code "
-                "ORDER BY a.published_at_cst DESC, a.id"
+                "LEFT JOIN provinces p ON p.code = s.province_code" + clause +
+                " ORDER BY a.published_at_cst DESC, a.id",
+                params,
             )
             rows = cur.fetchall()
     finally:

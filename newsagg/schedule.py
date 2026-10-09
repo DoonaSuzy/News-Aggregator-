@@ -5,7 +5,9 @@
   同一小时只建一次批（幂等）。
 - ``schedule_source()``：为单个来源生成或复用一条 ``crawl_jobs``。
 - ``publish_jobs()``：用 ``GET_LOCK('newsagg_publish')`` 投递 ``job_id`` 到 Redis。
-- ``create_manual_job()``：供手动 ``recrawl`` 命令使用。
+- ``create_manual_job()``：供手动 ``recrawl`` 命令使用（建任务并投递）。
+- ``create_local_job()``：建 manual 任务但不投递，供 ``crawl-once --adapter``
+  本地同步执行，避免与队列双消费。
 
 全部 SQL 经 ``newsagg.repo.Repository``，本模块不直接写 SQL。
 """
@@ -151,18 +153,38 @@ def publish_jobs(job_ids: list[int], payload: dict | None = None) -> int:
     return count
 
 
-def create_manual_job(adapter_name: str, *, days: int = 7) -> int:
-    """手动重抓：按天数构造 manual_recrawl 任务并投递，返回 job_id。"""
-    from datetime import timedelta
+def _create_manual_job_row(
+    adapter_name: str,
+    *,
+    days: int = 7,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> tuple[int, str]:
+    """建 manual 任务行（不投递 Redis），返回 (job_id, trigger)。
+
+    窗口两种写法：
+    - ``date_from``/``date_to``（YYYY-MM-DD，闭区间；缺省 date_to = date_from 当天）；
+    - 否则按 ``days`` 天数回看。
+    """
+    from datetime import date as _date, timedelta
 
     from newsagg.cleaning import to_cst_naive
     from newsagg.timewindow import JOB_FULL_RESCAN
 
     now_utc = datetime.utcnow()
     now_cst = to_cst_naive(now_utc)
-    start_cst = (now_cst - timedelta(days=days - 1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    if date_from:
+        start = _date.fromisoformat(date_from)
+        end = _date.fromisoformat(date_to) if date_to else start
+        start_cst = datetime(start.year, start.month, start.day)
+        end_cst = datetime(end.year, end.month, end.day, 23, 59, 59)
+        if end_cst > now_cst:
+            end_cst = now_cst
+    else:
+        start_cst = (now_cst - timedelta(days=days - 1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        end_cst = now_cst
     trigger = f"manual{now_cst.strftime('%Y%m%d%H%M%S')}"
 
     db = Database()
@@ -178,7 +200,7 @@ def create_manual_job(adapter_name: str, *, days: int = 7) -> int:
             trigger_key=trigger,
             job_type=JOB_FULL_RESCAN,
             window_start_cst=start_cst,
-            window_end_cst=now_cst,
+            window_end_cst=end_cst,
         )
         conn.commit()
     finally:
@@ -186,6 +208,38 @@ def create_manual_job(adapter_name: str, *, days: int = 7) -> int:
 
     if not job_id:
         raise RuntimeError(f"手动任务创建失败（可能重复）: {adapter_name}")
+    return job_id, trigger
+
+
+def create_local_job(
+    adapter_name: str,
+    *,
+    days: int = 7,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """建 manual 任务但**不投递** Redis，返回 job_id。
+
+    供 ``crawl-once --adapter X`` 本地同步执行，避免任务同时进队列
+    被 worker 领走造成双消费。
+    """
+    job_id, _ = _create_manual_job_row(
+        adapter_name, days=days, date_from=date_from, date_to=date_to
+    )
+    return job_id
+
+
+def create_manual_job(
+    adapter_name: str,
+    *,
+    days: int = 7,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """手动重抓：建 manual_recrawl 任务并投递队列，返回 job_id。"""
+    job_id, trigger = _create_manual_job_row(
+        adapter_name, days=days, date_from=date_from, date_to=date_to
+    )
     publish_jobs([job_id], {"trigger": trigger, "manual": True})
     return job_id
 
@@ -195,6 +249,7 @@ __all__ = [
     "schedule_source",
     "publish_jobs",
     "create_manual_job",
+    "create_local_job",
     "owner_id",
     "COORDINATOR_LOCK",
     "PUBLISH_LOCK",

@@ -245,18 +245,53 @@ class TestSaveArticle:
             body_text="body", content_hash="c")
         assert res.outcome == "saved" and res.article_id == 7
 
-    def test_same_hash_skipped(self):
+    def test_same_hash_and_meta_skipped(self):
+        # 正文与全部元数据都一致 → 真正跳过，不写 UPDATE
         conn = FakeConn()
-        conn.queue([{"id": 5, "content_hash": "c"}])
+        conn.queue([{
+            "id": 5, "content_hash": "c", "title": "t", "source_name": "",
+            "published_at_utc": None, "published_at_cst": None,
+            "time_precision": "unknown", "quality_flags": "[]",
+        }])
         res = repo_with(conn).save_article(
             conn, source_id=1, url_hash="h", url="http://x", title="t",
             body_text="body", content_hash="c")
         assert res.outcome == "skipped" and res.article_id == 5
         assert not any("UPDATE articles" in q for q in conn.executed)
 
+    def test_same_hash_heals_empty_title(self):
+        # 正文未变但旧标题为空、新标题非空 → 修复元数据（update）
+        conn = FakeConn()
+        conn.queue([{
+            "id": 5, "content_hash": "c", "title": "", "source_name": "",
+            "published_at_utc": None, "published_at_cst": None,
+            "time_precision": "unknown", "quality_flags": "[]",
+        }])
+        res = repo_with(conn).save_article(
+            conn, source_id=1, url_hash="h", url="http://x", title="t",
+            body_text="body", content_hash="c")
+        assert res.outcome == "updated" and res.article_id == 5
+        assert any("UPDATE articles" in q for q in conn.executed)
+
+    def test_same_hash_heals_polluted_source(self):
+        # 正文未变但旧来源被时间信息污染 → 只更新 source_name 列
+        conn = FakeConn()
+        conn.queue([{
+            "id": 5, "content_hash": "c", "title": "t",
+            "source_name": "2026-10-08 来源：人民日报 责任编辑：某某",
+            "published_at_utc": None, "published_at_cst": None,
+            "time_precision": "unknown", "quality_flags": "[]",
+        }])
+        res = repo_with(conn).save_article(
+            conn, source_id=1, url_hash="h", url="http://x", title="t",
+            body_text="body", content_hash="c", source_name="人民日报")
+        assert res.outcome == "updated"
+        joined = " ".join(conn.executed)
+        assert "source_name=%s" in joined
+
     def test_changed_hash_updates(self):
         conn = FakeConn()
-        conn.queue([{"id": 5, "content_hash": "old"}])
+        conn.queue([{"id": 5, "content_hash": "old", "title": "t"}])
         res = repo_with(conn).save_article(
             conn, source_id=1, url_hash="h", url="http://x", title="t",
             body_text="newbody", content_hash="c")

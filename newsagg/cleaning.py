@@ -15,6 +15,7 @@ PRECISION_SECOND = "second"
 
 # 质量标记
 FLAG_NON_TEXT = "non_text_content"
+FLAG_DUPLICATE = "duplicate"
 
 _WS_RE = re.compile(r"\s+")
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -142,6 +143,73 @@ def parse_published(raw: str | None, *, default_year: int | None = None) -> Pars
 
 # --- CSV 防公式注入 --------------------------------------------------------
 
+def extract_source(raw: str | None) -> str:
+    """从详情页信息块中抽取「来源」媒体名。
+
+    真实页面常把时间、来源、责编混在一个元素里，例如
+    ``"2026-10-08 20:08 来源：人民日报 责任编辑：翁晗"``。
+    本函数尽量只保留媒体名。
+
+    策略（按优先级）：
+    1. 命中「来源：X」→ 取 X 到行尾/常见分隔符前。
+    2. 否则去掉开头的日期时间与前缀词（记者/发自/编译等）。
+    3. 去掉尾部「责任编辑/编辑：Y」「作者：Y」等署名。
+    """
+    if not raw:
+        return ""
+    text = _TAG_RE.sub(" ", raw)
+    text = _ZERO_WIDTH_RE.sub("", text)
+    text = text.replace(" ", " ")
+    text = _WS_RE.sub(" ", text).strip()
+
+    # 1) 优先「来源：X」
+    m = re.search(r"来\s*源\s*[：:]\s*([^\s　<]{1,40})", text)
+    if m:
+        cand = m.group(1)
+        cand = _strip_trailing_credit(cand)
+        return cand.strip()
+
+    # 2) 去掉开头日期时间
+    text = re.sub(
+        r"^\s*\d{4}\s*[-/年]\s*\d{1,2}\s*[-/月]\s*\d{1,2}\s*日?\s*"
+        r"(\d{1,2}:\d{2}(:\d{2})?)?\s*", "", text,
+    )
+    # 去掉常见前缀词
+    text = re.sub(r"^\s*(记者|发自|编译|作者|编辑|来源)\s*[：:]?\s*", "", text)
+    text = _strip_trailing_credit(text)
+    return text.strip()
+
+
+def _strip_trailing_credit(text: str) -> str:
+    """去掉「责任编辑：X / 编辑：X / 作者：X / 文：X」及其后的署名。"""
+    # 在第一个署名分隔处截断
+    for sep in ("责任编辑", "见习编辑", "编辑", "记者", "作者", "文字", "摄影", "制作", "文：", "图："):
+        idx = text.find(sep)
+        if idx > 0:
+            text = text[:idx]
+    # 去掉尾部残留冒号/空白/连接符
+    text = re.sub(r"[\s　:：/丨\-—|·、]+$", "", text)
+    return text.strip()
+
+
+def looks_like_source(text: str | None) -> bool:
+    """启发式判断一段来源文本是否像真的媒体名。
+
+    真正的媒体名通常较短（≤20 字）、不含时间、不含「责任编辑」等署名。
+    """
+    if not text:
+        return False
+    t = text.strip()
+    if not t or len(t) > 20:
+        return False
+    if re.search(r"\d{4}[-/年]\d{1,2}", t):      # 含日期 → 不是来源
+        return False
+    for bad in ("责任编辑", "编辑：", "作者：", "记者", "摄影", "制作"):
+        if bad in t:
+            return False
+    return True
+
+
 def csv_cell(value: object) -> str:
     """转义 CSV 单元格，防止表格软件把内容当公式。"""
     if value is None:
@@ -176,6 +244,7 @@ __all__ = [
     "PRECISION_MINUTE",
     "PRECISION_SECOND",
     "FLAG_NON_TEXT",
+    "FLAG_DUPLICATE",
     "ParsedTime",
     "clean_title",
     "clean_source",
@@ -184,6 +253,8 @@ __all__ = [
     "quality_flags",
     "parse_published",
     "csv_cell",
+    "extract_source",
+    "looks_like_source",
     "to_utc_naive",
     "to_cst_naive",
     "utc_now_naive",

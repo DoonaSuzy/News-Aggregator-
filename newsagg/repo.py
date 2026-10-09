@@ -352,18 +352,58 @@ class Repository:
                      time_precision: str = "unknown",
                      content_hash: str = "",
                      quality_flags: list[str] | None = None) -> ArticleUpsert:
-        """upsert 文章。身份 = (source_id, url_hash)。内容未变跳过。"""
+        """upsert 文章。身份 = (source_id, url_hash)。
+
+        正文未变（``content_hash`` 相同）时不再整行跳过：标题、来源、
+        发布时间、精度、质量标记是独立列，抽取改进后应据此“修复”旧记录
+        （例如正文一致但标题/来源之前为空或被污染）。仅更新确有变化的列。
+        """
         flags = json.dumps(quality_flags or [], ensure_ascii=False)
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, content_hash FROM articles "
+                "SELECT id, content_hash, title, source_name, published_at_utc, "
+                "published_at_cst, time_precision, quality_flags FROM articles "
                 "WHERE source_id = %s AND url_hash = %s",
                 (source_id, url_hash),
             )
             existing = cur.fetchone()
             if existing:
-                if existing["content_hash"] == content_hash:
+                body_same = existing.get("content_hash") == content_hash
+                # 收集相对旧记录确有变化的元数据列（正文不变时只修元数据）
+                def _col(key: str) -> str:
+                    val = existing.get(key)
+                    return val if isinstance(val, str) else ("" if val is None else str(val))
+
+                meta_updates: dict[str, object] = {}
+                if _col("title") != (title or ""):
+                    meta_updates["title"] = title
+                if _col("source_name") != (source_name or ""):
+                    meta_updates["source_name"] = source_name
+                if existing.get("published_at_utc") != published_utc:
+                    meta_updates["published_at_utc"] = published_utc
+                if existing.get("published_at_cst") != published_cst:
+                    meta_updates["published_at_cst"] = published_cst
+                if _col("time_precision") != (time_precision or "unknown"):
+                    meta_updates["time_precision"] = time_precision
+                if _col("quality_flags") != flags:
+                    meta_updates["quality_flags"] = flags
+
+                if body_same and not meta_updates:
+                    # 正文与全部元数据均未变：真正跳过
                     return ArticleUpsert("skipped", existing["id"])
+
+                if body_same:
+                    # 正文未变，仅修复元数据列
+                    assignments = ", ".join(f"{col}=%s" for col in meta_updates)
+                    values = list(meta_updates.values()) + [existing["id"]]
+                    cur.execute(
+                        f"UPDATE articles SET {assignments}, "
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+                        values,
+                    )
+                    return ArticleUpsert("updated", existing["id"])
+
+                # 正文有变：整行更新
                 cur.execute(
                     "UPDATE articles SET url=%s, title=%s, body_text=%s, "
                     "source_name=%s, published_at_utc=%s, published_at_cst=%s, "
@@ -412,6 +452,14 @@ class Repository:
                 "SELECT attempt_count FROM crawl_jobs WHERE id=%s)",
                 (status, job_id, job_id),
             )
+            # 释放来源租约：终态后不允许再用旧令牌/旧 owner 阻塞下次抓取。
+            # 只清空属于本次任务的来源，且仅在租约仍指向本任务时才清（避免误伤他人）。
+            cur.execute(
+                "UPDATE sources SET lease_token=NULL, lease_owner=NULL, "
+                "lease_until_utc=NULL "
+                "WHERE id=(SELECT source_id FROM crawl_jobs WHERE id=%s)",
+                (job_id,),
+            )
 
     def set_retry(self, conn, *, job_id: int, retry_minutes: int,
                   stop_reason: str | None = None) -> None:
@@ -422,6 +470,13 @@ class Repository:
                 "retry_at_utc = DATE_ADD(UTC_TIMESTAMP(), INTERVAL %s MINUTE), "
                 "stop_reason=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                 (retry_minutes, stop_reason, job_id),
+            )
+            # 释放租约：重试等待期间不应继续占用来源（到点由新批次重新认领）。
+            cur.execute(
+                "UPDATE sources SET lease_token=NULL, lease_owner=NULL, "
+                "lease_until_utc=NULL "
+                "WHERE id=(SELECT source_id FROM crawl_jobs WHERE id=%s)",
+                (job_id,),
             )
 
 

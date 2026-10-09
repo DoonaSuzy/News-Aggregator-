@@ -17,6 +17,8 @@ import threading
 from datetime import datetime, timedelta
 
 from newsagg.config import get_settings
+from newsagg.crawl.dedup import UrlBloom, find_duplicate_article
+from newsagg.cleaning import FLAG_DUPLICATE
 from newsagg.db import Database
 from newsagg.errors import LeaseRejected
 from newsagg.logutil import get_logger
@@ -37,7 +39,8 @@ class CrawlSession:
 
     def __init__(self, job_id: int, *, source_id: int, window: Window,
                  lease_token: str, owner: str, adapter_name: str,
-                 db: Database | None = None, repo: Repository | None = None) -> None:
+                 db: Database | None = None, repo: Repository | None = None,
+                 bloom: UrlBloom | None = None, refresh: bool = False) -> None:
         self.settings = get_settings()
         self.db = db or Database()
         self.repo = repo or Repository(self.db)
@@ -49,6 +52,12 @@ class CrawlSession:
         self.owner = owner
         self.adapter_name = adapter_name
 
+        # URL 布隆过滤器（可选；由 engine 注入 Redis 客户端构造）
+        self.bloom = bloom
+        #: 修复模式：True 时不跳过已发现的候选，强制重抓以修复元数据
+        self.refresh = refresh
+
+
         # 计数器与运行态
         self.discovered = 0
         self.saved = 0
@@ -57,6 +66,8 @@ class CrawlSession:
         self.stop_reason: str | None = None
         self.blocked_status: int | None = None
         self._seen_hashes: set[str] = set()
+        #: 列表页标题缓存：url_hash → 列表标题（详情页标题缺失时兜底）
+        self._list_titles: dict[str, str] = {}
         self._stop = threading.Event()
 
         # 租约续期
@@ -116,12 +127,37 @@ class CrawlSession:
 
     # --- 候选判定 ---------------------------------------------------------
 
-    def consider(self, url: str, url_hash: str) -> bool:
-        """判定一个列表候选是否应抓详情。首次见到返回 True。"""
+    def consider(self, url: str, url_hash: str, *, list_title: str = "") -> bool:
+        """判定一个列表候选是否应抓详情。首次见到返回 True。
+
+        ``list_title`` 为列表页标题，缓存用于详情页标题缺失时兜底。
+        """
+        if list_title:
+            self._list_titles[url_hash] = list_title
         if url_hash in self._seen_hashes:
             return False
         self._seen_hashes.add(url_hash)
         self.discovered += 1
+        # 修复模式：强制重抓已发现的候选（跳过布隆），让 save_article 修复元数据
+        if self.refresh:
+            conn = self.db.connect()
+            try:
+                self.repo.upsert_discovered(
+                    conn, source_id=self.source_id, job_id=self.job_id,
+                    url_hash=url_hash, url=url,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return True
+        # 布隆快速判重：已完整抓取过的 URL 直接跳过 HTTP 请求
+        # （误判仅多跳一次 DB 唯一键兜底，不会漏抓新文；真正的去重仍由 DB 保证）
+        if self.bloom is not None:
+            try:
+                if self.bloom.maybe_seen(url_hash):
+                    return False
+            except Exception:  # noqa: BLE001
+                pass
         conn = self.db.connect()
         try:
             new = self.repo.upsert_discovered(
@@ -132,6 +168,10 @@ class CrawlSession:
         finally:
             conn.close()
         return new
+
+    def list_title_for(self, url_hash: str) -> str:
+        """返回缓存里的列表标题（详情页标题缺失时的兜底）。"""
+        return self._list_titles.get(url_hash, "")
 
     # --- 阻断策略 ---------------------------------------------------------
 
@@ -182,21 +222,40 @@ class CrawlSession:
                      published_cst: datetime | None, published_utc: datetime | None,
                      time_precision: str, content_hash: str,
                      quality_flags: list[str]) -> str:
-        """写文章 + 更新检查点。返回 upsert outcome。"""
+        """写文章 + 更新检查点。返回 upsert outcome。
+
+        多源同文：跨来源按 ``content_hash`` 查到首发文章时，在 ``quality_flags``
+        打 ``duplicate_of:<adapter>`` 标记（保留记录不删除）。
+        """
+        flags = list(quality_flags or [])
         conn = self.db.connect()
         try:
+            if content_hash and FLAG_DUPLICATE not in flags:
+                dup = find_duplicate_article(
+                    conn, source_id=self.source_id, content_hash=content_hash,
+                )
+                if dup and dup.get("adapter_name"):
+                    tag = f"duplicate_of:{dup['adapter_name']}"
+                    if tag not in flags:
+                        flags.append(tag)
             result = self.repo.save_article(
                 conn, source_id=self.source_id, url_hash=url_hash, url=url,
                 title=title, body_text="\n".join(paragraphs),
                 source_name=source_name, published_utc=published_utc,
                 published_cst=published_cst, time_precision=time_precision,
-                content_hash=content_hash, quality_flags=quality_flags,
+                content_hash=content_hash, quality_flags=flags,
             )
             conn.commit()
         finally:
             conn.close()
         if result.outcome in ("saved", "updated"):
             self.saved += 1
+            # 抓取成功后登记到布隆过滤器，供后续批次跳过
+            if self.bloom is not None:
+                try:
+                    self.bloom.add(url_hash)
+                except Exception:  # noqa: BLE001
+                    pass
         if published_cst and (
             self.checkpoint_cst is None or published_cst < self.checkpoint_cst
         ):
