@@ -12,7 +12,9 @@ WORKDIR /app
 
 # 先装依赖（利用层缓存）
 COPY newsplatform/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    -r requirements.txt
 
 # 复制代码
 COPY newsplatform/ /app/newsplatform/
