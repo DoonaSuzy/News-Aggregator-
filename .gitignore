@@ -44,8 +44,14 @@ _e2e.py
 _batch.py
 _patch.py
 *.spawn.out.log
+_boot.log
+_boot.err
 
 # 数据中台：本地密码文件（模板 .env.platform.example 仍入库）
 newsplatform/.env.platform
 **/.env.platform
+
+# 数据中台：由 export_platform_data.py 生成的数据导入产物（不入库）
+newsagg_platform_import.sql
+
 

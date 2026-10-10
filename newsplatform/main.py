@@ -69,7 +69,7 @@ async def _seed_admin() -> None:
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.1.0",
+    version="0.2.0",
     description=(
         "省级新闻聚合数据中台对外接口。\n\n"
         "- 统一响应信封：`{code, message, data, request_id, timestamp}`\n"
@@ -102,7 +102,7 @@ app.include_router(api_router, prefix=API_PREFIX)
 
 @app.get("/", tags=["健康检查"], summary="服务信息")
 async def root():
-    return ok({"name": settings.app_name, "version": "0.1.0", "env": settings.env},
+    return ok({"name": settings.app_name, "version": "0.2.0", "env": settings.env},
               message="welcome")
 
 

@@ -18,8 +18,9 @@
 | 配置 | python-dotenv（读取 `.env`） |
 | 时区 | tzdata |
 | 测试 | pytest |
+| **数据中台（v0.2.0）** | **FastAPI**（异步接口）+ **Flask**（管理后台）+ **Docker/Compose**（容器化编排） |
 
-> 说明：采集层基于 **Scrapy Spider**（`newsagg.crawl.spider`，`async start()` 异步入口），由 `crawl/settings.py` 配置并发 8、AutoThrottle 与限流槽，两个自定义中间件（`AccessPolicyMiddleware`/`PaceMiddleware`）负责 robots 决策与站点限速。每站点的抓取预算与 MySQL 租约由 `crawl/session.py` 精确控制。
+> 说明：采集层基于 **Scrapy Spider**（`newsagg.crawl.spider`，`async start()` 异步入口），由 `crawl/settings.py` 配置并发 8、AutoThrottle 与限流槽，两个自定义中间件（`AccessPolicyMiddleware`/`PaceMiddleware`）负责 robots 决策与站点限速。每站点的抓取预算与 MySQL 租约由 `crawl/session.py` 精确控制。数据中台层（`newsplatform/`，v0.2.0 新增）基于 FastAPI + Flask + Docker，见 §3。
 
 ---
 
@@ -56,10 +57,24 @@ News Aggregator/
 │   ├── logutil.py               # 日志配置（文件轮转 + 控制台）
 │   ├── errors.py                # 自定义异常
 │   └── supervisor.py            # 常驻监督，维持 worker 池
-├── sql/schema.sql               # 8 张表的建表语句
+├── sql/schema.sql               # 8 张表的建表语句（爬虫库 newsagg）
+├── sql/platform_schema.sql      # 数据中台独立库建表（newsagg_platform）
 ├── tests/                       # 单元测试 + HTML 夹具
 ├── scripts/                     # 运维 / 诊断 / 修复脚本（见 §8）
-├── docs/                        # 设计文档、开发说明、采集报告、上下文交接
+├── deploy/                      # 数据中台一键部署脚本（init_vm/deploy/healthcheck）
+├── newsplatform/                # 数据中台子系统（FastAPI+Flask+Docker，见 §3）
+│   ├── main.py                  # FastAPI 入口（uvicorn/gunicorn）
+│   ├── core/                    # 配置/数据库/响应/异常/鉴权/限流/日志
+│   ├── api/v1/                  # 接入层路由（articles/sources/provinces/auth/health）
+│   ├── services/                # 业务服务层
+│   ├── repositories/            # 数据访问层（async SQLAlchemy）
+│   ├── models/orm.py            # 中台 ORM（独立库表）
+│   ├── admin/                   # Flask 管理后台
+│   ├── Dockerfile               # FastAPI 镜像
+│   ├── Dockerfile.flask         # Flask 镜像
+│   ├── docker-compose.yml       # 四容器编排（fastapi/flask/mysql/redis）
+│   └── requirements.txt         # 中台专属依赖
+├── docs/                        # 设计文档、开发说明、采集报告、部署运维手册、上下文交接
 ├── pyproject.toml               # 包定义、依赖、pytest 配置
 ├── requirements.txt             # 锁定版本
 ├── .env.example                 # 环境变量模板
@@ -235,6 +250,65 @@ News Aggregator/
 
 ---
 
+## 3A. 数据中台（v0.2.0 新增）
+
+采集层把文章写入爬虫库 `newsagg`；**数据中台**是独立的对外服务子系统（`newsplatform/`），用独立库 `newsagg_platform`、独立缓存、独立环境变量前缀 `PLATFORM_`，与爬虫解耦。爬虫数据通过 `scripts/export_platform_data.py` 一次性 ETL 导入，或后续由爬虫经接口/直连持续同步。
+
+### 架构与分工
+
+| 组件 | 容器 | 端口 | 框架 | 职责 |
+|------|------|------|------|------|
+| 核心接口服务 | `newsagg-fastapi` | 8000 | FastAPI + Uvicorn(Gunicorn) | 文章/来源/省份/统计/鉴权，异步高并发 |
+| 管理后台 | `newsagg-flask` | 5000 | Flask + Gunicorn | 来源状态看板、采集概览 |
+| 数据库 | `newsagg-mysql` | 3306(内网) | MySQL 8.4 | 独立库 `newsagg_platform` |
+| 缓存/限流 | `newsagg-redis` | 6379(内网) | Redis 7 | 缓存与计数 |
+
+分层：**接入层** `api/v1/`（路由+参数校验）→ **服务层** `services/`（业务编排）→ **数据访问层** `repositories/`（async SQLAlchemy）→ **模型层** `models/orm.py`；横切能力在 `core/`：统一响应信封、全局异常、JWT 鉴权、slowapi 限流、request_id 结构化日志。
+
+### 统一响应与鉴权
+
+所有接口返回统一信封：
+
+```json
+{ "code": 0, "message": "ok", "data": {}, "request_id": "ab12cd34", "timestamp": "2026-10-10T03:00:00+00:00" }
+```
+
+错误码对齐 HTTP 语义（400/401/404/429/500/503）；每个响应带 `X-Request-ID`。登录 `POST /api/v1/auth/login`（开发环境播种 `admin/admin123`）获取 Bearer 令牌。
+
+### 对外接口（自动文档）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/health` `/health/ready` | 存活 / 就绪探针 |
+| POST | `/api/v1/auth/login` | 登录获取 JWT |
+| GET | `/api/v1/articles` | 文章列表（省份/来源/关键词/日期/分页） |
+| GET | `/api/v1/articles/{id}` | 文章详情（含正文） |
+| GET | `/api/v1/provinces` | 31 省覆盖与计数 |
+| GET | `/api/v1/sources` | 来源列表 |
+| GET | `/api/v1/stats/overview` | 总览统计 |
+
+接口文档由 FastAPI 原生 OpenAPI 自动生成：`/docs`（Swagger UI）、`/redoc`、`/openapi.json`，全部对外接口自动纳入。
+
+### 部署（Docker Compose）
+
+```bash
+# 虚拟机初始化（装 Docker/Compose、防火墙、SSH 免密引导）
+sudo bash deploy/init_vm.sh
+# 一键部署四容器（生成随机密码的 .env.platform → 构建 → 启动 → 健康检查）
+sudo bash deploy/deploy.sh
+# 连通性 + 接口 + 容器健康验证
+sudo bash deploy/healthcheck.sh 127.0.0.1
+```
+
+详见 `docs/数据中台部署运维手册.md`。pip 用清华源、Docker 用镜像加速器，适配国内网络。
+
+### 数据接入
+
+- **一次性 ETL**：本机 `python scripts/export_platform_data.py -o newsagg_platform_import.sql` 从爬虫库导出中台格式 SQL，上传后在容器内 `mysql ... newsagg_platform < newsagg_platform_import.sql` 导入。
+- **持续同步**：可扩展爬虫侧在采集完结后直连中台库 `newsagg_mysql_data`/容器写入，或新增 `POST` 写入接口 + `ingest_batches` 留痕。
+
+---
+
 ## 4. 安装与运行
 
 ### 4.1 环境准备
@@ -387,7 +461,8 @@ CSV 使用 UTF-8 BOM，以 `=`、`+`、`-`、`@` 开头的单元格会加前缀�
 - `docs/设计文档-省级新闻聚合.md` —— 首版设计；来源清单权威版本，已按代码校准
 - `docs/development.md` —— 开发说明与启用来源整理时篇数
 - `docs/采集链路修复与全量采集报告-2026-10-09.md` —— 采集链路修复与全量采集报告
-- `docs/上下文交接-2026-10-09.md` —— 最新上下文交接（接手必读）
+- `docs/数据中台部署运维手册.md` —— 数据中台（FastAPI+Flask+Docker）部署与运维
+- `docs/上下文交接-2026-10-09.md` —— 上下文交接（接手参考）
 - `docs/爬虫修复工作包.md` / `docs/CONTEXT_HANDOFF.md` —— 历史修复工作包与早期交接
 
 来源名称对照国家网信办 2025 版互联网新闻信息稿源单位名单：

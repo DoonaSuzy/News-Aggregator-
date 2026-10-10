@@ -6,7 +6,7 @@ Twisted 默认反应器即可，无需（也不应）强制 asyncio 反应器—
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # --- 反应器说明 -----------------------------------------------------------
 # 不在导入期强制安装 asyncio 反应器。实测在 Windows + Python 3.13 +
