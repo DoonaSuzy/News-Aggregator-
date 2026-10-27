@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 
 import re
 
@@ -33,6 +32,7 @@ from newsagg.crawl.mimetypes import is_non_text_page
 from newsagg.crawl.sampler import Sampler
 from newsagg.crawl.session import CrawlSession
 from newsagg.logutil import get_logger
+from newsagg.timeguard import clamp_published
 from newsagg.urls import normalize_url, url_hash
 
 log = get_logger()
@@ -199,14 +199,10 @@ class SiteSpider(scrapy.Spider):
         paragraphs = clean_paragraphs(detail.paragraphs)
         flags = quality_flags(paragraphs, is_media_only=detail.media_only)
         ch = content_hash(paragraphs)
-        cst = parsed.value
-        # 时间可信度护栏：页脚/版权行里的年份会被误当成发布时间
-        # （实测出现过 1934、1956 这类荒谬值），越界即按未知处理。
-        if cst is not None and (
-            cst.year < 2000
-            or cst > self.session.window.end_cst + timedelta(days=1)
-        ):
-            cst = None
+        # 时间可信度护栏：页脚/版权行、正文引用的历史年份会被误当成发布时间
+        # （实测出现过 1956、2610 这类荒谬值），越界即按未知处理。
+        # 规则抽到 newsagg/timeguard.py，便于单测与脚本复用。
+        cst = clamp_published(parsed.value, self.session.window.end_cst)
         utc = to_utc_naive(cst) if cst else None
         # 详情页标题缺失时，兜底用列表页标题
         title = clean_title(detail.title) or clean_title(self.session.list_title_for(nh))
