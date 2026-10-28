@@ -1,0 +1,25 @@
+# 构建上下文只需要 newsagg/ 与 requirements.txt，其余一律排除，
+# 避免把 logs/、测试夹具、历史 dump 打进镜像层。
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.log
+_boot.log
+_boot.err
+logs/
+docs/
+tests/
+scripts/
+sql/
+deploy/
+data/
+*.sql
+*.gz
+*.zip
+*.bundle
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
